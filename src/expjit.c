@@ -25,8 +25,23 @@ typedef enum {
     ND_ADD,
     ND_SUB,
     ND_MUL,
-    ND_DIV
+    ND_DIV,
+    ND_MOD,
+    ND_POW,
+    ND_CALL
 } NodeKind;
+
+typedef enum {
+    FN_SIN,
+    FN_COS,
+    FN_TAN,
+    FN_SQRT,
+    FN_ABS,
+    FN_EXP,
+    FN_LN,
+    FN_LOG10,
+    FN_COUNT
+} FnId;
 
 typedef struct {
     NodeKind kind;
@@ -55,6 +70,8 @@ typedef enum {
     TK_MINUS,
     TK_STAR,
     TK_SLASH,
+    TK_PERCENT,
+    TK_CARET,
     TK_LPAREN,
     TK_RPAREN,
     TK_ERR
@@ -63,10 +80,11 @@ typedef enum {
 typedef struct {
     const char *src;
     size_t i;
+    size_t tok;
     TokKind kind;
     double num;
     char ident[MAX_NAME];
-    char err[128];
+    char err[160];
 } Lexer;
 
 typedef struct {
@@ -82,6 +100,13 @@ static void set_err(char *err, size_t errlen, const char *msg) {
     }
 }
 
+static void set_err_at(Parser *ps, const char *msg) {
+    if (!ps->err || !ps->errlen) {
+        return;
+    }
+    snprintf(ps->err, ps->errlen, "column %zu: %s", ps->lx->tok + 1, msg);
+}
+
 static void skip_ws(Lexer *lx) {
     while (lx->src[lx->i] && isspace((unsigned char)lx->src[lx->i])) {
         lx->i++;
@@ -90,6 +115,7 @@ static void skip_ws(Lexer *lx) {
 
 static void lex_next(Lexer *lx) {
     skip_ws(lx);
+    lx->tok = lx->i;
     char c = lx->src[lx->i];
     if (!c) {
         lx->kind = TK_END;
@@ -101,7 +127,7 @@ static void lex_next(Lexer *lx) {
         lx->num = strtod(lx->src + lx->i, &end);
         if (end == lx->src + lx->i || errno == ERANGE) {
             lx->kind = TK_ERR;
-            snprintf(lx->err, sizeof(lx->err), "invalid number");
+            snprintf(lx->err, sizeof(lx->err), "column %zu: invalid number", lx->tok + 1);
             return;
         }
         lx->i = (size_t)(end - lx->src);
@@ -113,7 +139,7 @@ static void lex_next(Lexer *lx) {
         while (isalnum((unsigned char)lx->src[lx->i]) || lx->src[lx->i] == '_') {
             if (n + 1 >= MAX_NAME) {
                 lx->kind = TK_ERR;
-                snprintf(lx->err, sizeof(lx->err), "variable name too long");
+                snprintf(lx->err, sizeof(lx->err), "column %zu: variable name too long", lx->tok + 1);
                 return;
             }
             lx->ident[n++] = lx->src[lx->i++];
@@ -131,10 +157,21 @@ static void lex_next(Lexer *lx) {
         lx->kind = TK_MINUS;
         return;
     case '*':
+        if (lx->src[lx->i] == '*') {
+            lx->i++;
+            lx->kind = TK_CARET;
+            return;
+        }
         lx->kind = TK_STAR;
         return;
     case '/':
         lx->kind = TK_SLASH;
+        return;
+    case '%':
+        lx->kind = TK_PERCENT;
+        return;
+    case '^':
+        lx->kind = TK_CARET;
         return;
     case '(':
         lx->kind = TK_LPAREN;
@@ -144,28 +181,63 @@ static void lex_next(Lexer *lx) {
         return;
     default:
         lx->kind = TK_ERR;
-        snprintf(lx->err, sizeof(lx->err), "unexpected character '%c'", c);
+        snprintf(lx->err, sizeof(lx->err), "column %zu: unexpected character '%c'", lx->tok + 1, c);
         return;
     }
 }
 
-static int intern_var(ExpjitProgram *p, const char *name, char *err, size_t errlen) {
+static int intern_var(ExpjitProgram *p, const char *name, Parser *ps) {
     for (int i = 0; i < p->nvars; i++) {
         if (strcmp(p->vars[i], name) == 0) {
             return i;
         }
     }
     if (p->nvars >= MAX_VARS) {
-        set_err(err, errlen, "too many variables");
+        set_err_at(ps, "too many variables");
         return -1;
     }
     snprintf(p->vars[p->nvars], MAX_NAME, "%s", name);
     return p->nvars++;
 }
 
+static int lookup_fn(const char *name) {
+    static const struct {
+        const char *n;
+        FnId id;
+    } tab[] = {
+        {"sin", FN_SIN},
+        {"cos", FN_COS},
+        {"tan", FN_TAN},
+        {"sqrt", FN_SQRT},
+        {"abs", FN_ABS},
+        {"exp", FN_EXP},
+        {"ln", FN_LN},
+        {"log", FN_LN},
+        {"log10", FN_LOG10},
+    };
+    for (size_t i = 0; i < sizeof(tab) / sizeof(tab[0]); i++) {
+        if (strcmp(tab[i].n, name) == 0) {
+            return (int)tab[i].id;
+        }
+    }
+    return -1;
+}
+
+static int builtin_const(const char *name, double *out) {
+    if (strcmp(name, "pi") == 0 || strcmp(name, "PI") == 0) {
+        *out = acos(-1.0);
+        return 1;
+    }
+    if (strcmp(name, "e") == 0 || strcmp(name, "E") == 0) {
+        *out = exp(1.0);
+        return 1;
+    }
+    return 0;
+}
+
 static int add_node(Parser *ps, Node n) {
     if (ps->p->nnodes >= MAX_NODES) {
-        set_err(ps->err, ps->errlen, "expression too large");
+        set_err_at(ps, "expression too large");
         return -1;
     }
     int id = ps->p->nnodes++;
@@ -174,6 +246,7 @@ static int add_node(Parser *ps, Node n) {
 }
 
 static int parse_expr(Parser *ps);
+static int parse_unary(Parser *ps);
 
 static int parse_primary(Parser *ps) {
     Lexer *lx = ps->lx;
@@ -185,14 +258,47 @@ static int parse_primary(Parser *ps) {
         return add_node(ps, n);
     }
     if (lx->kind == TK_IDENT) {
-        int v = intern_var(ps->p, lx->ident, ps->err, ps->errlen);
+        char name[MAX_NAME];
+        snprintf(name, sizeof(name), "%s", lx->ident);
+        lex_next(lx);
+        if (lx->kind == TK_LPAREN) {
+            int fn = lookup_fn(name);
+            if (fn < 0) {
+                char msg[96];
+                snprintf(msg, sizeof(msg), "unknown function '%s'", name);
+                set_err_at(ps, msg);
+                return -1;
+            }
+            lex_next(lx);
+            int arg = parse_expr(ps);
+            if (arg < 0) {
+                return -1;
+            }
+            if (lx->kind != TK_RPAREN) {
+                set_err_at(ps, "expected ')' after function argument");
+                return -1;
+            }
+            lex_next(lx);
+            Node n = {0};
+            n.kind = ND_CALL;
+            n.left = arg;
+            n.var = fn;
+            return add_node(ps, n);
+        }
+        double c;
+        if (builtin_const(name, &c)) {
+            Node n = {0};
+            n.kind = ND_NUM;
+            n.num = c;
+            return add_node(ps, n);
+        }
+        int v = intern_var(ps->p, name, ps);
         if (v < 0) {
             return -1;
         }
         Node n = {0};
         n.kind = ND_VAR;
         n.var = v;
-        lex_next(lx);
         return add_node(ps, n);
     }
     if (lx->kind == TK_LPAREN) {
@@ -202,7 +308,7 @@ static int parse_primary(Parser *ps) {
             return -1;
         }
         if (lx->kind != TK_RPAREN) {
-            set_err(ps->err, ps->errlen, "expected ')'");
+            set_err_at(ps, "expected ')'");
             return -1;
         }
         lex_next(lx);
@@ -212,11 +318,35 @@ static int parse_primary(Parser *ps) {
         set_err(ps->err, ps->errlen, lx->err);
         return -1;
     }
-    set_err(ps->err, ps->errlen, "expected number, variable, or '('");
+    set_err_at(ps, "expected number, name, function, or '('");
     return -1;
 }
 
+static int parse_power(Parser *ps) {
+    int left = parse_primary(ps);
+    if (left < 0) {
+        return -1;
+    }
+    if (ps->lx->kind == TK_CARET) {
+        lex_next(ps->lx);
+        int right = parse_unary(ps);
+        if (right < 0) {
+            return -1;
+        }
+        Node n = {0};
+        n.kind = ND_POW;
+        n.left = left;
+        n.right = right;
+        return add_node(ps, n);
+    }
+    return left;
+}
+
 static int parse_unary(Parser *ps) {
+    if (ps->lx->kind == TK_PLUS) {
+        lex_next(ps->lx);
+        return parse_unary(ps);
+    }
     if (ps->lx->kind == TK_MINUS) {
         lex_next(ps->lx);
         int c = parse_unary(ps);
@@ -228,7 +358,7 @@ static int parse_unary(Parser *ps) {
         n.left = c;
         return add_node(ps, n);
     }
-    return parse_primary(ps);
+    return parse_power(ps);
 }
 
 static int parse_term(Parser *ps) {
@@ -236,8 +366,13 @@ static int parse_term(Parser *ps) {
     if (left < 0) {
         return -1;
     }
-    while (ps->lx->kind == TK_STAR || ps->lx->kind == TK_SLASH) {
-        NodeKind k = ps->lx->kind == TK_STAR ? ND_MUL : ND_DIV;
+    while (ps->lx->kind == TK_STAR || ps->lx->kind == TK_SLASH || ps->lx->kind == TK_PERCENT) {
+        NodeKind k = ND_MUL;
+        if (ps->lx->kind == TK_SLASH) {
+            k = ND_DIV;
+        } else if (ps->lx->kind == TK_PERCENT) {
+            k = ND_MOD;
+        }
         lex_next(ps->lx);
         int right = parse_unary(ps);
         if (right < 0) {
@@ -279,6 +414,30 @@ static int parse_expr(Parser *ps) {
     return left;
 }
 
+static double call_fn(int id, double x) {
+    switch ((FnId)id) {
+    case FN_SIN:
+        return sin(x);
+    case FN_COS:
+        return cos(x);
+    case FN_TAN:
+        return tan(x);
+    case FN_SQRT:
+        return sqrt(x);
+    case FN_ABS:
+        return fabs(x);
+    case FN_EXP:
+        return exp(x);
+    case FN_LN:
+        return log(x);
+    case FN_LOG10:
+        return log10(x);
+    case FN_COUNT:
+        break;
+    }
+    return NAN;
+}
+
 static double eval_node(const ExpjitProgram *p, int id, const double *env) {
     const Node *n = &p->nodes[id];
     switch (n->kind) {
@@ -296,6 +455,12 @@ static double eval_node(const ExpjitProgram *p, int id, const double *env) {
         return eval_node(p, n->left, env) * eval_node(p, n->right, env);
     case ND_DIV:
         return eval_node(p, n->left, env) / eval_node(p, n->right, env);
+    case ND_MOD:
+        return fmod(eval_node(p, n->left, env), eval_node(p, n->right, env));
+    case ND_POW:
+        return pow(eval_node(p, n->left, env), eval_node(p, n->right, env));
+    case ND_CALL:
+        return call_fn(n->var, eval_node(p, n->left, env));
     }
     return NAN;
 }
@@ -368,6 +533,39 @@ typedef struct {
     int failed;
 } Asm;
 
+static double jit_sin(double x) { return sin(x); }
+static double jit_cos(double x) { return cos(x); }
+static double jit_tan(double x) { return tan(x); }
+static double jit_sqrt(double x) { return sqrt(x); }
+static double jit_abs(double x) { return fabs(x); }
+static double jit_exp(double x) { return exp(x); }
+static double jit_ln(double x) { return log(x); }
+static double jit_log10(double x) { return log10(x); }
+
+static void *fn_addr(int id) {
+    switch ((FnId)id) {
+    case FN_SIN:
+        return (void *)jit_sin;
+    case FN_COS:
+        return (void *)jit_cos;
+    case FN_TAN:
+        return (void *)jit_tan;
+    case FN_SQRT:
+        return (void *)jit_sqrt;
+    case FN_ABS:
+        return (void *)jit_abs;
+    case FN_EXP:
+        return (void *)jit_exp;
+    case FN_LN:
+        return (void *)jit_ln;
+    case FN_LOG10:
+        return (void *)jit_log10;
+    case FN_COUNT:
+        break;
+    }
+    return NULL;
+}
+
 static void emit_bytes(Asm *a, const uint8_t *b, size_t n) {
     if (a->failed) {
         return;
@@ -391,6 +589,12 @@ static void emit4(Asm *a, uint32_t v) {
     emit_bytes(a, b, 4);
 }
 
+static void emit8(Asm *a, uint64_t v) {
+    for (int i = 0; i < 8; i++) {
+        emit1(a, (uint8_t)(v >> (8 * i)));
+    }
+}
+
 static int intern_const(Asm *a, double v) {
     for (int i = 0; i < a->nconst; i++) {
         if (memcmp(&a->consts[i], &v, sizeof(double)) == 0) {
@@ -405,13 +609,12 @@ static int intern_const(Asm *a, double v) {
     return a->nconst++;
 }
 
-/* movsd xmm0, [rip+rel32] */
 static void emit_load_const(Asm *a, double v) {
     int ci = intern_const(a, v);
     emit1(a, 0xF2);
     emit1(a, 0x0F);
     emit1(a, 0x10);
-    emit1(a, 0x05); /* ModRM: disp32(rip) -> xmm0 */
+    emit1(a, 0x05);
     if (a->npatch >= MAX_PATCHES) {
         a->failed = 1;
         return;
@@ -422,24 +625,23 @@ static void emit_load_const(Asm *a, double v) {
     emit4(a, 0);
 }
 
-/* movsd xmm0, [rdi + 8*idx] */
+/* movsd xmm0, [rbx + 8*idx] */
 static void emit_load_var(Asm *a, int idx) {
     int32_t disp = (int32_t)(idx * 8);
     emit1(a, 0xF2);
     emit1(a, 0x0F);
     emit1(a, 0x10);
     if (disp == 0) {
-        emit1(a, 0x07); /* [rdi] */
+        emit1(a, 0x03);
     } else if (disp >= -128 && disp <= 127) {
-        emit1(a, 0x47);
+        emit1(a, 0x43);
         emit1(a, (uint8_t)disp);
     } else {
-        emit1(a, 0x87);
+        emit1(a, 0x83);
         emit4(a, (uint32_t)disp);
     }
 }
 
-/* movsd [r8], xmm0 ; add r8, 8 */
 static void emit_push_xmm0(Asm *a) {
     emit1(a, 0xF2);
     emit1(a, 0x41);
@@ -452,7 +654,6 @@ static void emit_push_xmm0(Asm *a) {
     emit1(a, 0x08);
 }
 
-/* sub r8, 8 ; movsd xmm1, [r8] */
 static void emit_pop_xmm1(Asm *a) {
     emit1(a, 0x49);
     emit1(a, 0x83);
@@ -465,7 +666,6 @@ static void emit_pop_xmm1(Asm *a) {
     emit1(a, 0x08);
 }
 
-/* sub r8, 8 ; movsd xmm0, [r8] */
 static void emit_pop_xmm0(Asm *a) {
     emit1(a, 0x49);
     emit1(a, 0x83);
@@ -478,9 +678,40 @@ static void emit_pop_xmm0(Asm *a) {
     emit1(a, 0x00);
 }
 
+static void emit_call_abs(Asm *a, void *fn) {
+    /* push r8; sub rsp, 8; movabs rax, fn; call rax; add rsp, 8; pop r8 */
+    emit1(a, 0x41);
+    emit1(a, 0x50);
+    emit1(a, 0x48);
+    emit1(a, 0x83);
+    emit1(a, 0xEC);
+    emit1(a, 0x08);
+    emit1(a, 0x48);
+    emit1(a, 0xB8);
+    emit8(a, (uint64_t)(uintptr_t)fn);
+    emit1(a, 0xFF);
+    emit1(a, 0xD0);
+    emit1(a, 0x48);
+    emit1(a, 0x83);
+    emit1(a, 0xC4);
+    emit1(a, 0x08);
+    emit1(a, 0x41);
+    emit1(a, 0x58);
+}
+
 static void emit_binop(Asm *a, NodeKind k) {
-    emit_pop_xmm1(a); /* right */
-    emit_pop_xmm0(a); /* left */
+    emit_pop_xmm1(a);
+    emit_pop_xmm0(a);
+    if (k == ND_MOD) {
+        emit_call_abs(a, (void *)fmod);
+        emit_push_xmm0(a);
+        return;
+    }
+    if (k == ND_POW) {
+        emit_call_abs(a, (void *)pow);
+        emit_push_xmm0(a);
+        return;
+    }
     emit1(a, 0xF2);
     emit1(a, 0x0F);
     switch (k) {
@@ -500,23 +731,20 @@ static void emit_binop(Asm *a, NodeKind k) {
         a->failed = 1;
         return;
     }
-    emit1(a, 0xC1); /* xmm0, xmm1 */
+    emit1(a, 0xC1);
     emit_push_xmm0(a);
 }
 
 static void emit_neg(Asm *a) {
     emit_pop_xmm0(a);
-    /* xorpd xmm1, xmm1 */
     emit1(a, 0x66);
     emit1(a, 0x0F);
     emit1(a, 0x57);
     emit1(a, 0xC9);
-    /* subsd xmm1, xmm0 */
     emit1(a, 0xF2);
     emit1(a, 0x0F);
     emit1(a, 0x5C);
     emit1(a, 0xC8);
-    /* movsd xmm0, xmm1 */
     emit1(a, 0xF2);
     emit1(a, 0x0F);
     emit1(a, 0x10);
@@ -543,10 +771,24 @@ static void emit_node(Asm *a, const ExpjitProgram *p, int id) {
     case ND_SUB:
     case ND_MUL:
     case ND_DIV:
+    case ND_MOD:
+    case ND_POW:
         emit_node(a, p, n->left);
         emit_node(a, p, n->right);
         emit_binop(a, n->kind);
         break;
+    case ND_CALL: {
+        void *fn = fn_addr(n->var);
+        if (!fn) {
+            a->failed = 1;
+            return;
+        }
+        emit_node(a, p, n->left);
+        emit_pop_xmm0(a);
+        emit_call_abs(a, fn);
+        emit_push_xmm0(a);
+        break;
+    }
     }
 }
 
@@ -571,16 +813,19 @@ static int emit_jit(ExpjitProgram *p) {
     a.buf = mem;
     a.cap = cap;
 
-    /* prologue: push rbp; mov rbp, rsp; sub rsp, 512; lea r8, [rsp] */
+    /* push rbp; mov rbp, rsp; push rbx; mov rbx, rdi; sub rsp, 512; lea r8, [rsp] */
     emit1(&a, 0x55);
     emit1(&a, 0x48);
     emit1(&a, 0x89);
     emit1(&a, 0xE5);
+    emit1(&a, 0x53);
+    emit1(&a, 0x48);
+    emit1(&a, 0x89);
+    emit1(&a, 0xFB);
     emit1(&a, 0x48);
     emit1(&a, 0x81);
     emit1(&a, 0xEC);
     emit4(&a, 512);
-    /* lea r8, [rsp] */
     emit1(&a, 0x4C);
     emit1(&a, 0x8D);
     emit1(&a, 0x04);
@@ -589,14 +834,15 @@ static int emit_jit(ExpjitProgram *p) {
     emit_node(&a, p, p->root);
     emit_pop_xmm0(&a);
 
-    /* mov rsp, rbp; pop rbp; ret */
+    /* lea rsp, [rbp-8]; pop rbx; pop rbp; ret */
     emit1(&a, 0x48);
-    emit1(&a, 0x89);
-    emit1(&a, 0xEC);
+    emit1(&a, 0x8D);
+    emit1(&a, 0x65);
+    emit1(&a, 0xF8);
+    emit1(&a, 0x5B);
     emit1(&a, 0x5D);
     emit1(&a, 0xC3);
 
-    /* align constant pool to 8 */
     while ((a.len & 7) != 0) {
         emit1(&a, 0x90);
     }
@@ -678,7 +924,7 @@ int expjit_compile(const char *src, ExpjitProgram **out, char *err, size_t errle
         return -1;
     }
     if (lx.kind != TK_END) {
-        set_err(err, errlen, "unexpected trailing input");
+        set_err_at(&ps, "unexpected trailing input");
         free(p);
         return -1;
     }

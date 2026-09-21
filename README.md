@@ -1,46 +1,56 @@
 # ExpJIT
 
-A tiny **expression JIT**: parse an arithmetic expression, emit x86-64 machine code, and run it.
+A tiny **expression JIT**: type math, get a number. On x86-64 it compiles the expression to machine code; otherwise it still runs through an interpreter.
 
-On non-x86-64 hosts the same AST still evaluates through a small interpreter.
+## Quick start
+
+```bash
+make
+make test
+./expjit '2*(x+1)' --x 3          # 8
+./expjit 'sin(pi/2)'              # 1
+./expjit                          # interactive prompt
+```
+
+In the prompt:
+
+```
+> x = 3
+x = 3
+> 2*(x+1)
+8
+> quit
+```
 
 ## Language
 
 ```
 expr     := term (('+' | '-') term)*
-term     := unary (('*' | '/') unary)*
-unary    := '-' unary | primary
-primary  := NUMBER | IDENT | '(' expr ')'
+term     := unary (('*' | '/' | '%') unary)*
+unary    := '+' unary | '-' unary | power
+power    := primary (('^' | '**') unary)?
+primary  := NUMBER | IDENT | IDENT '(' expr ')' | '(' expr ')'
 ```
 
-- Numbers are IEEE `double` (`strtod` syntax).
-- Names are `[A-Za-z_][A-Za-z0-9_]*`.
-- Precedence: unary `-`, then `*` `/` (left), then `+` `-` (left).
-- Division by zero follows IEEE floating-point rules.
+| You type | Meaning |
+| --- | --- |
+| `+ - * / %` | add, sub, mul, div, remainder (`fmod`) |
+| `^` or `**` | power (`2^3^2` is `512`) |
+| `-2^2` | `-4` (power before unary minus) |
+| `pi`, `e` | constants |
+| `sin cos tan sqrt abs exp ln log log10` | functions (`log` is natural log) |
 
-## Build
-
-```bash
-make
-make test
-```
-
-Needs a C11 compiler (`gcc` or `clang`) and a POSIX `mmap`/`mprotect` environment.
+Numbers are IEEE doubles. Names are `[A-Za-z_][A-Za-z0-9_]*`. Missing variables are `0`.
 
 ## CLI
 
 ```bash
-./expjit '2*(x+1)' --x 3
-# 8
-
+./expjit [--interp] [<expr> [name=value ...]]
 ./expjit 'x*x + y*y' x=3 y=4
-# 25
-
-./expjit --interp '1+2'
-# 3
+./expjit --help
 ```
 
-Omitted variables are `0`. `--interp` skips the JIT and uses the tree walker.
+`--interp` uses the tree walker instead of JIT. No expression starts the prompt (`help`, `quit`, `name = expr`).
 
 ## Library
 
@@ -49,27 +59,27 @@ Omitted variables are `0`. `--interp` skips the JIT and uses the tree walker.
 
 ExpjitProgram *p;
 char err[128];
-expjit_compile("2*(x+1)", &p, err, sizeof err);
-double env[] = {3}; /* env[i] matches expjit_varname(p, i) */
+if (expjit_compile("2*(x+1)", &p, err, sizeof err) != 0) { /* error */ }
+double env[] = {3};
 double r = expjit_run(p, env);
 expjit_free(p);
 ```
 
-`expjit_run` uses JIT code when `expjit_has_jit` is true, otherwise the interpreter.
-
 ## How the JIT works
 
-1. Recursive-descent parser builds an AST.
-2. On x86-64, a code buffer is filled with SSE2 `movsd` / `addsd` / `subsd` / `mulsd` / `divsd`.
-3. Operands live on a small stack addressed by `r8`; the result is returned in `xmm0` (`double fn(const double *env)`).
-4. Constants sit in a pool after `ret`, patched with RIP-relative loads.
-5. The page is switched from RW to RX (`mprotect`) before the call.
+1. Parse into an AST.
+2. On x86-64, emit SSE2 `addsd` / `mulsd` / … and `call` into `pow`, `sin`, and friends.
+3. Operand stack on `r8`; result in `xmm0`. Env pointer kept in `rbx`.
+4. Constant pool after `ret`, RIP-relative loads; page set RX with `mprotect`.
 
-There is no register allocator, no folding, and no integer type — this is a teaching-sized JIT, not LLVM.
+Teaching-sized: no optimizer, no integers, no user-defined functions.
 
-## Limitations
+## Build
 
-- x86-64 System V only for native code (Linux/macOS).
-- Caps: 32 variables, 512 AST nodes.
-- No `^`, functions, or assignments.
-- JIT code is not serialized; compile per process.
+Needs a C11 compiler and POSIX `mmap` / `mprotect`.
+
+```bash
+make        # expjit
+make test
+make clean
+```
