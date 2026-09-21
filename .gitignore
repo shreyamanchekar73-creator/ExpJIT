@@ -1,0 +1,3 @@
+expjit
+src/*.o
+tests/test_expjit
