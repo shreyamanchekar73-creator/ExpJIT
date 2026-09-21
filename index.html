@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ExpJIT</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>ExpJIT</h1>
+      <p class="lead">Type a math expression. Anyone with this link can use it — nothing to install.</p>
+      <label for="expr">Expression</label>
+      <input id="expr" type="text" autocomplete="off" spellcheck="false" placeholder="2*(x+1)" />
+      <div class="vars" id="vars"></div>
+      <button id="run" type="button">Calculate</button>
+      <p id="out" class="out" aria-live="polite"></p>
+      <p class="hint">
+        <code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>%</code> <code>^</code>
+        · <code>pi</code> <code>e</code>
+        · <code>sin</code> <code>cos</code> <code>sqrt</code> <code>abs</code> <code>ln</code>
+      </p>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
