@@ -1,21 +1,9 @@
 # ExpJIT
 
-Live site (open this in a browser — no install):
+Project dashboard (this is the website):
 
 **https://shreyamanchekar73-creator.github.io/ExpJIT/**
 
-Type an expression, fill any variables, click **Calculate**.
+Same look as the original ExprJIT dashboard: Cranelift JIT metrics, query console, and feature cards.
 
-## Language
-
-`+ - * / %` · `^` or `**` · unary `+` `-` · `pi` `e`  
-`sin` `cos` `tan` `sqrt` `abs` `exp` `ln` `log` `log10`
-
-## Optional: run on your computer (Linux/macOS)
-
-```bash
-make
-./expjit '2*(x+1)' --x 3
-```
-
-Windows users should use the website above.
+The original repo with the Rust engine is [exprjit](https://github.com/shreyamanchekar73-creator/exprjit).
