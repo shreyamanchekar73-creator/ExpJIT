@@ -1,5 +1,15 @@
 # ExpJIT
 
+This repository also includes **Shriram Finance digital forms** for field staff: fill KYC + FATCA-CRS and the Fixed Deposit application on a computer, print A4, then get a pen signature on paper. See [`digital-forms/`](digital-forms/README.md).
+
+```bash
+cd digital-forms && npm install && npm run dev
+```
+
+---
+
+# ExpJIT
+
 A tiny **expression JIT**: type math, get a number. On x86-64 it compiles the expression to machine code; otherwise it still runs through an interpreter.
 
 ## Quick start

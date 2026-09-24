@@ -1,3 +1,5 @@
 expjit
 src/*.o
 tests/test_expjit
+digital-forms/node_modules
+digital-forms/dist
